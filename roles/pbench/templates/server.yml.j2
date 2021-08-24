@@ -1,0 +1,52 @@
+---
+apiVersion: v1
+kind: List
+metadata: {}
+items:
+{% macro job_template(item, node_idx_item='') %}
+  - kind: Job
+    apiVersion: batch/v1
+    metadata:    
+      name: 'pbench-server-{{worker_node_list[ node_idx_item ] | truncate(27,true,'') }}-{{ item }}-{{ trunc_uuid }}'
+      namespace: "{{ operator_namespace }}"
+    spec:
+      ttlSecondsAfterFinished: 600
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            benchmark-operator-uuid: {{ uuid }}
+            benchmark-operator-workload: pbench
+            benchmark-operator-role: server
+            app: pbench-bench-server-{{ worker_node_list[node_idx_item] | truncate(27,true,'') }}-{{ item  }}-{{ trunc_uuid }}
+            type: {{ ansible_operator_meta.name }}-bench-server-{{ trunc_uuid }}
+          annotations:
+            node_idx: '{{ node_idx_item }}'
+            pod_idx: '{{ item }}'
+        spec:
+{% if workload_args.runtime_class is defined %}
+          runtimeClassName: "{{ workload_args.runtime_class }}"
+{% endif %}
+          containers:
+          - name: benchmark
+            image: {{ workload_args.image | default('quay.io/meyceoz/signal-pbench:latest') }}
+            imagePullPolicy: Always
+            command: ["/bin/sh","-c"]
+            args: ["./runner.sh"]
+          restartPolicy: OnFailure
+{% if workload_args.pin is sameas true %}
+          nodeSelector:
+            kubernetes.io/hostname: '{{ workload_args.pin_server }}'
+{% endif %}
+          nodeSelector:
+            kubernetes.io/hostname: '{{ worker_node_list[node_idx_item] }}'
+
+{% macro metadata() %}{% include "metadata.yml.j2" %}{% endmacro %}
+    {{ metadata()|indent }}
+{% endmacro %}
+{% for node_idx_item in range(node_sequence|int)  %}
+{% for item in range(pod_sequence|int)  %}
+{{ job_template(item,node_idx_item) }}
+{% endfor %}
+{% endfor %}
+

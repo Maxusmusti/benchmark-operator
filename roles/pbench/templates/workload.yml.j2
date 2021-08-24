@@ -1,0 +1,85 @@
+---
+apiVersion: v1
+kind: List
+metadata: {}
+items:
+{% for item in resource_item %}
+  - kind: Job
+    apiVersion: batch/v1
+    metadata:
+      name: 'pbench-client-{{item.status.podIP}}-{{ trunc_uuid }}'
+      namespace: '{{ operator_namespace }}'
+    spec:
+      template:
+        metadata:
+          labels:
+            benchmark-operator-uuid: {{ uuid }}
+            benchmark-operator-workload: pbench
+            benchmark-operator-role: client
+            app: pbench-bench-client-{{ trunc_uuid }}
+            clientfor: {{ item.metadata.labels.app }}
+            type: {{ ansible_operator_meta.name }}-bench-client-{{ trunc_uuid }}
+{% if workload_args.multus.enabled is sameas true %}
+          annotations:
+            k8s.v1.cni.cncf.io/networks: {{ workload_args.multus.client }}
+{% endif %}
+        spec:
+{% if workload_args.runtime_class is defined %}
+          runtimeClassName: "{{ workload_args.runtime_class }}"
+{% endif %}
+{% if workload_args.hostnetwork is sameas true %}
+          hostNetwork: true
+          serviceAccountName: benchmark-operator
+{% endif %}
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                      - {{ item.metadata.labels.app }}
+                  topologyKey: kubernetes.io/hostname
+          containers:
+          - name: benchmark
+            image: {{ workload_args.image | default('quay.io/meyceoz/benchmark-controller:latest') }}
+            env:
+              - name: redis_host
+                value: "something"
+              - name: redis_port
+                value: "somethingelse"
+              - name: client_node
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: server_node
+                value: "{{ pbench.pin_server|default("unknown") }}"
+            imagePullPolicy: Always
+            command: ["/bin/sh", "-c"]
+            args: ["python3 controller.py"]
+          restartPolicy: OnFailure
+{% if workload_args.pin is sameas false %}
+{% if workload_args.colocate is sameas true %}
+          nodeSelector:
+            # client node same as server node
+            kubernetes.io/hostname: "{{ worker_node_list[item['metadata']['annotations']['node_idx'] | from_json] }}"
+{% else %}
+          nodeSelector:
+            # skew client node one position to the right in the worker_node_list
+            kubernetes.io/hostname: "{{ worker_node_list[ (1+(item['metadata']['annotations']['node_idx'] | from_json)) % (worker_node_list|length)] }}"
+{% endif %}
+
+{% else  %}
+{% if workload_args.pin is sameas true %}
+          nodeSelector:
+            kubernetes.io/hostname: '{{ workload_args.pin_client }}'
+{% endif %}
+   
+{% endif %}
+
+{% macro metadata() %}{% include "metadata.yml.j2" %}{% endmacro %}
+    {{ metadata()|indent }}
+{% endfor %}
